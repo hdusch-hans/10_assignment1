@@ -116,6 +116,32 @@
   }
   @keyframes pulse { 50% { opacity: 0.25; } }
 
+  .fs-controls {
+    display: none;
+    position: absolute;
+    bottom: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    gap: 8px;
+    z-index: 3;
+  }
+  .frame:fullscreen .fs-controls, .frame:-webkit-full-screen .fs-controls { display: flex; }
+  .fs-controls button {
+    background: rgba(0,0,0,0.65);
+    color: #f2efe6;
+    border: 1.5px solid rgba(242,239,230,0.7);
+    border-radius: 2px;
+    padding: 10px 16px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+  }
+  .fs-controls button:hover { background: rgba(0,0,0,0.85); }
+  .fs-controls button:disabled { opacity: 0.35; cursor: default; }
+  .fs-controls button.recording { background: var(--accent); border-color: var(--accent); color: #fff; }
+
   .task-card {
     display: none;
     max-width: 90vw;
@@ -305,6 +331,11 @@
 <div class="frame" id="frame">
   <video id="video" autoplay playsinline muted></video>
   <div class="rec-dot" id="recDot"><span class="dot"></span><span>Rec</span></div>
+  <div class="fs-controls" id="fsControls">
+    <button id="fsSnapBtn" disabled>Take Snapshot</button>
+    <button id="fsRecordBtn" disabled>Record Video</button>
+    <button id="fsExitBtn">Exit Full Screen</button>
+  </div>
 </div>
 
 <div class="task-card" id="taskCard">
@@ -332,6 +363,7 @@
   <div class="archive-header">
     <h2>Archive</h2>
     <span class="sub" id="archiveCount"></span>
+    <button id="clearBtn">Clear archive</button>
   </div>
   <div class="archive-empty" id="archiveEmpty">Nothing saved yet. Snapshots and recordings you take here will show up below, on this browser only.</div>
   <div id="archiveContainer"></div>
@@ -374,6 +406,10 @@ const importConfirmBtn = document.getElementById('importConfirmBtn');
 const importCancelBtn = document.getElementById('importCancelBtn');
 const metaDate = document.getElementById('metaDate');
 const metaTime = document.getElementById('metaTime');
+const clearBtn = document.getElementById('clearBtn');
+const fsSnapBtn = document.getElementById('fsSnapBtn');
+const fsRecordBtn = document.getElementById('fsRecordBtn');
+const fsExitBtn = document.getElementById('fsExitBtn');
 
 let stream = null;
 let mirrored = true;
@@ -479,6 +515,22 @@ async function deleteArchiveItem(id) {
     tx.onerror = () => reject(tx.error);
   });
 }
+
+async function clearArchive() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    tx.objectStore(STORE_NAME).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+clearBtn.addEventListener('click', async () => {
+  if (!confirm('Delete everything in the archive on this device? This cannot be undone.')) return;
+  await clearArchive();
+  renderArchive();
+});
 
 function buildArchiveCard(item, idxLabel) {
   const url = URL.createObjectURL(item.blob);
@@ -648,6 +700,8 @@ async function startCamera() {
     toggleBtn.textContent = 'Stop';
     snapBtn.disabled = false;
     recordBtn.disabled = false;
+    fsSnapBtn.disabled = false;
+    fsRecordBtn.disabled = false;
     statusEl.textContent = 'Live.';
     pickNewTask();
   } catch (err) {
@@ -667,6 +721,8 @@ function stopCamera() {
   toggleBtn.textContent = 'Start';
   snapBtn.disabled = true;
   recordBtn.disabled = true;
+  fsSnapBtn.disabled = true;
+  fsRecordBtn.disabled = true;
   statusEl.textContent = 'Camera is off.';
   clearTask();
 }
@@ -691,7 +747,8 @@ fullscreenBtn.addEventListener('click', () => {
 
 /* ---------- Snapshot ---------- */
 
-snapBtn.addEventListener('click', () => {
+function takeSnapshot() {
+  if (!stream) return;
   const usedTask = currentTask;
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
@@ -711,7 +768,10 @@ snapBtn.addEventListener('click', () => {
     renderArchive();
     pickNewTask();
   }, 'image/png');
-});
+}
+
+snapBtn.addEventListener('click', takeSnapshot);
+fsSnapBtn.addEventListener('click', takeSnapshot);
 
 /* ---------- Video recording ---------- */
 
@@ -724,7 +784,14 @@ function pickMimeType() {
   return candidates.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
 }
 
-recordBtn.addEventListener('click', () => {
+function setRecordingUI(isRecording) {
+  [recordBtn, fsRecordBtn].forEach(btn => {
+    btn.classList.toggle('recording', isRecording);
+    btn.textContent = isRecording ? 'Stop Recording' : 'Record Video';
+  });
+}
+
+function toggleRecording() {
   if (!stream) return;
   if (mediaRecorder && mediaRecorder.state === 'recording') {
     mediaRecorder.stop();
@@ -744,8 +811,7 @@ recordBtn.addEventListener('click', () => {
   };
   mediaRecorder.onstop = async () => {
     recDot.classList.remove('active');
-    recordBtn.classList.remove('recording');
-    recordBtn.textContent = 'Record Video';
+    setRecordingUI(false);
     const wasLive = !!stream;
     if (recordedChunks.length) {
       const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'video/webm' });
@@ -761,9 +827,15 @@ recordBtn.addEventListener('click', () => {
   };
   mediaRecorder.start();
   recDot.classList.add('active');
-  recordBtn.classList.add('recording');
-  recordBtn.textContent = 'Stop Recording';
+  setRecordingUI(true);
   statusEl.textContent = 'Recording...';
+}
+
+recordBtn.addEventListener('click', toggleRecording);
+fsRecordBtn.addEventListener('click', toggleRecording);
+
+fsExitBtn.addEventListener('click', () => {
+  (document.exitFullscreen || document.webkitExitFullscreen).call(document);
 });
 
 cameraSelect.addEventListener('change', () => {
