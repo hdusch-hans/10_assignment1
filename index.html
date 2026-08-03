@@ -53,6 +53,26 @@
     background: #e5484d; animation: pulse 1s infinite;
   }
   @keyframes pulse { 50% { opacity: 0.3; } }
+
+  .task-card {
+    display: none;
+    max-width: 90vw;
+    background: #14141a;
+    border: 1px solid #2a2a2e;
+    border-radius: 10px;
+    padding: 10px 18px;
+    text-align: center;
+  }
+  .task-card.active { display: block; }
+  .task-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    opacity: 0.5;
+    margin-bottom: 4px;
+  }
+  #taskText { font-size: 1rem; }
+
   .controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
   select, button {
     background: #1c1c1f;
@@ -84,11 +104,19 @@
   .archive-header h2 { margin: 24px 0 0; }
   #clearBtn { font-size: 0.8rem; padding: 6px 10px; }
   .archive-empty { opacity: 0.5; font-size: 0.85rem; margin-top: 8px; }
+
+  .archive-folder { margin-top: 20px; }
+  .archive-folder-title {
+    font-size: 0.85rem;
+    opacity: 0.75;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #2a2a2e;
+  }
   .archive-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     gap: 12px;
-    margin-top: 12px;
   }
   .archive-item {
     background: #1c1c1f;
@@ -134,12 +162,19 @@
   <div class="rec-dot" id="recDot"><span class="dot"></span><span>REC</span></div>
 </div>
 
+<div class="task-card" id="taskCard">
+  <div class="task-label">Your task</div>
+  <div id="taskText"></div>
+</div>
+
 <div class="controls">
   <select id="cameraSelect"></select>
   <button id="toggleBtn">Start</button>
   <button id="snapBtn" disabled>Take Snapshot</button>
   <button id="recordBtn" disabled>Record Video</button>
   <button id="mirrorBtn">Toggle Mirror</button>
+  <button id="importBtn">Import</button>
+  <input type="file" id="importInput" accept="image/*,video/*" multiple style="display:none">
 </div>
 
 <div id="status">Camera is off.</div>
@@ -153,7 +188,7 @@
     <button id="clearBtn">Clear archive</button>
   </div>
   <div class="archive-empty" id="archiveEmpty">Nothing saved yet. Snapshots and recordings you take here will show up below, on this browser only.</div>
-  <div class="archive-grid" id="archiveGrid"></div>
+  <div id="archiveContainer"></div>
 </div>
 
 <script>
@@ -162,12 +197,16 @@ const toggleBtn = document.getElementById('toggleBtn');
 const snapBtn = document.getElementById('snapBtn');
 const recordBtn = document.getElementById('recordBtn');
 const mirrorBtn = document.getElementById('mirrorBtn');
+const importBtn = document.getElementById('importBtn');
+const importInput = document.getElementById('importInput');
 const cameraSelect = document.getElementById('cameraSelect');
 const statusEl = document.getElementById('status');
 const canvas = document.getElementById('snapshot');
 const snapLink = document.getElementById('snapLink');
 const recDot = document.getElementById('recDot');
-const archiveGrid = document.getElementById('archiveGrid');
+const taskCard = document.getElementById('taskCard');
+const taskTextEl = document.getElementById('taskText');
+const archiveContainer = document.getElementById('archiveContainer');
 const archiveEmpty = document.getElementById('archiveEmpty');
 const clearBtn = document.getElementById('clearBtn');
 
@@ -175,6 +214,33 @@ let stream = null;
 let mirrored = true;
 let mediaRecorder = null;
 let recordedChunks = [];
+let currentTask = null;
+
+/* ---------- Silly tasks ---------- */
+
+const TASKS = [
+  'Strike your best "design thinking" pose — chin stroke, squint, stare meaningfully at a whiteboard.',
+  'Build a tiny sculpture out of sticky notes and photograph it like museum art.',
+  'Find three different colored Post-its and wear them like a medal.',
+  'Recreate a meme using only office supplies within arm\'s reach.',
+  'Recreate a famous painting using only what\'s on your desk.',
+  'Show us your "I\'ve had too much coffee" stare.',
+  'Pretend you\'re presenting to a room of 500 people, but it\'s just the camera.',
+  'Balance a pen on your nose (or attempt to, dramatically failing counts).',
+  'Show your best shrimp-working pose.',
+  'Strike a pose like you just invented the sticky note.'
+];
+
+function pickNewTask() {
+  currentTask = TASKS[Math.floor(Math.random() * TASKS.length)];
+  taskTextEl.textContent = currentTask;
+  taskCard.classList.add('active');
+}
+
+function clearTask() {
+  currentTask = null;
+  taskCard.classList.remove('active');
+}
 
 /* ---------- IndexedDB archive storage ---------- */
 
@@ -199,11 +265,11 @@ function openDB() {
   return dbPromise;
 }
 
-async function addArchiveItem(blob, type) {
+async function addArchiveItem(blob, type, category) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
-    tx.objectStore(STORE_NAME).add({ blob, type, timestamp: Date.now() });
+    tx.objectStore(STORE_NAME).add({ blob, type, category: category || 'Uncategorized', timestamp: Date.now() });
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -239,48 +305,81 @@ async function clearArchive() {
   });
 }
 
+function buildArchiveCard(item) {
+  const url = URL.createObjectURL(item.blob);
+  const card = document.createElement('div');
+  card.className = 'archive-item';
+
+  const media = document.createElement(item.type === 'video' ? 'video' : 'img');
+  media.src = url;
+  if (item.type === 'video') { media.controls = true; }
+  card.appendChild(media);
+
+  const meta = document.createElement('div');
+  meta.className = 'archive-item-meta';
+  meta.textContent = (item.type === 'video' ? 'Video' : 'Photo') + ' — ' + new Date(item.timestamp).toLocaleString();
+  card.appendChild(meta);
+
+  const actions = document.createElement('div');
+  actions.className = 'archive-item-actions';
+
+  const dl = document.createElement('a');
+  dl.href = url;
+  dl.download = (item.type === 'video' ? 'recording-' : 'snapshot-') + item.timestamp + (item.type === 'video' ? '.webm' : '.png');
+  dl.textContent = 'Download';
+  dl.style.background = '#1c1c1f';
+  dl.style.border = '1px solid #333';
+  dl.style.color = '#eee';
+  actions.appendChild(dl);
+
+  const delBtn = document.createElement('button');
+  delBtn.textContent = 'Delete';
+  delBtn.addEventListener('click', async () => {
+    await deleteArchiveItem(item.id);
+    renderArchive();
+  });
+  actions.appendChild(delBtn);
+
+  card.appendChild(actions);
+  return card;
+}
+
 async function renderArchive() {
   const items = await getAllArchiveItems();
-  archiveGrid.innerHTML = '';
+  archiveContainer.innerHTML = '';
   archiveEmpty.style.display = items.length ? 'none' : 'block';
+  if (!items.length) return;
 
+  // group items by category (i.e. "folder")
+  const groups = new Map();
   items.forEach(item => {
-    const url = URL.createObjectURL(item.blob);
-    const card = document.createElement('div');
-    card.className = 'archive-item';
+    const key = item.category || 'Uncategorized';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  });
 
-    const media = document.createElement(item.type === 'video' ? 'video' : 'img');
-    media.src = url;
-    if (item.type === 'video') { media.controls = true; }
-    card.appendChild(media);
+  // stable folder order: tasks in their defined order, then Imported, then anything else
+  const orderedKeys = [];
+  TASKS.forEach(t => { if (groups.has(t)) orderedKeys.push(t); });
+  ['Imported', 'Uncategorized'].forEach(k => { if (groups.has(k) && !orderedKeys.includes(k)) orderedKeys.push(k); });
+  groups.forEach((_, k) => { if (!orderedKeys.includes(k)) orderedKeys.push(k); });
 
-    const meta = document.createElement('div');
-    meta.className = 'archive-item-meta';
-    meta.textContent = (item.type === 'video' ? 'Video' : 'Photo') + ' — ' + new Date(item.timestamp).toLocaleString();
-    card.appendChild(meta);
+  orderedKeys.forEach(key => {
+    const groupItems = groups.get(key);
+    const folder = document.createElement('div');
+    folder.className = 'archive-folder';
 
-    const actions = document.createElement('div');
-    actions.className = 'archive-item-actions';
+    const title = document.createElement('div');
+    title.className = 'archive-folder-title';
+    title.textContent = key + ' (' + groupItems.length + ')';
+    folder.appendChild(title);
 
-    const dl = document.createElement('a');
-    dl.href = url;
-    dl.download = (item.type === 'video' ? 'recording-' : 'snapshot-') + item.timestamp + (item.type === 'video' ? '.webm' : '.png');
-    dl.textContent = 'Download';
-    dl.style.background = '#1c1c1f';
-    dl.style.border = '1px solid #333';
-    dl.style.color = '#eee';
-    actions.appendChild(dl);
+    const grid = document.createElement('div');
+    grid.className = 'archive-grid';
+    groupItems.forEach(item => grid.appendChild(buildArchiveCard(item)));
+    folder.appendChild(grid);
 
-    const delBtn = document.createElement('button');
-    delBtn.textContent = 'Delete';
-    delBtn.addEventListener('click', async () => {
-      await deleteArchiveItem(item.id);
-      renderArchive();
-    });
-    actions.appendChild(delBtn);
-
-    card.appendChild(actions);
-    archiveGrid.appendChild(card);
+    archiveContainer.appendChild(folder);
   });
 }
 
@@ -288,6 +387,23 @@ clearBtn.addEventListener('click', async () => {
   if (!confirm('Delete everything in the archive on this device? This cannot be undone.')) return;
   await clearArchive();
   renderArchive();
+});
+
+/* ---------- Import from file (e.g. photos taken on your phone) ---------- */
+
+importBtn.addEventListener('click', () => importInput.click());
+
+importInput.addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files || []);
+  if (!files.length) return;
+  statusEl.textContent = 'Importing ' + files.length + ' file(s)...';
+  for (const file of files) {
+    const type = file.type.startsWith('video') ? 'video' : 'photo';
+    await addArchiveItem(file, type, 'Imported');
+  }
+  importInput.value = '';
+  await renderArchive();
+  statusEl.textContent = stream ? 'Live.' : 'Camera is off.';
 });
 
 /* ---------- Camera ---------- */
@@ -324,6 +440,7 @@ async function startCamera() {
     snapBtn.disabled = false;
     recordBtn.disabled = false;
     statusEl.textContent = 'Live.';
+    pickNewTask();
   } catch (err) {
     statusEl.textContent = 'Could not access camera: ' + err.message;
   }
@@ -342,6 +459,7 @@ function stopCamera() {
   snapBtn.disabled = true;
   recordBtn.disabled = true;
   statusEl.textContent = 'Camera is off.';
+  clearTask();
 }
 
 toggleBtn.addEventListener('click', () => {
@@ -370,7 +488,7 @@ snapBtn.addEventListener('click', () => {
     snapLink.href = dataUrl;
     snapLink.style.display = 'inline-block';
     snapLink.textContent = 'Download snapshot (' + new Date().toLocaleTimeString() + ')';
-    await addArchiveItem(blob, 'photo');
+    await addArchiveItem(blob, 'photo', currentTask);
     renderArchive();
   }, 'image/png');
 });
@@ -394,6 +512,7 @@ recordBtn.addEventListener('click', () => {
   }
   recordedChunks = [];
   const mimeType = pickMimeType();
+  const taskAtRecordStart = currentTask;
   try {
     mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
   } catch (err) {
@@ -409,7 +528,7 @@ recordBtn.addEventListener('click', () => {
     recordBtn.textContent = 'Record Video';
     if (recordedChunks.length) {
       const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'video/webm' });
-      await addArchiveItem(blob, 'video');
+      await addArchiveItem(blob, 'video', taskAtRecordStart);
       renderArchive();
     }
     statusEl.textContent = stream ? 'Live.' : 'Camera is off.';
