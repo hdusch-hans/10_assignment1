@@ -142,6 +142,22 @@
   .fs-controls button:disabled { opacity: 0.35; cursor: default; }
   .fs-controls button.recording { background: var(--accent); border-color: var(--accent); color: #fff; }
 
+  .countdown-overlay {
+    display: none;
+    position: absolute;
+    inset: 0;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.35);
+    z-index: 4;
+  }
+  .countdown-overlay.active { display: flex; }
+  .countdown-overlay span {
+    font-family: 'Archivo Black', 'Arial Black', sans-serif;
+    font-size: 5rem;
+    color: #f2efe6;
+  }
+
   .task-card {
     display: none;
     max-width: 90vw;
@@ -326,13 +342,15 @@
   <span id="metaTime">—</span>
 </div>
 
-<h1>Live Camera Feed</h1>
+<h1>1 min movement break</h1>
 
 <div class="frame" id="frame">
   <video id="video" autoplay playsinline muted></video>
   <div class="rec-dot" id="recDot"><span class="dot"></span><span>Rec</span></div>
+  <div class="countdown-overlay" id="countdownOverlay"><span id="countdownText"></span></div>
   <div class="fs-controls" id="fsControls">
     <button id="fsSnapBtn" disabled>Take Snapshot</button>
+    <button id="fsTimerSnapBtn" disabled>Snapshot in 3s</button>
     <button id="fsRecordBtn" disabled>Record Video</button>
     <button id="fsExitBtn">Exit Full Screen</button>
   </div>
@@ -347,6 +365,7 @@
   <select id="cameraSelect"></select>
   <button id="toggleBtn">Start</button>
   <button id="snapBtn" disabled>Take Snapshot</button>
+  <button id="timerSnapBtn" disabled>Snapshot in 3s</button>
   <button id="recordBtn" disabled>Record Video</button>
   <button id="mirrorBtn">Toggle Mirror</button>
   <button id="fullscreenBtn">Full Screen</button>
@@ -410,6 +429,11 @@ const clearBtn = document.getElementById('clearBtn');
 const fsSnapBtn = document.getElementById('fsSnapBtn');
 const fsRecordBtn = document.getElementById('fsRecordBtn');
 const fsExitBtn = document.getElementById('fsExitBtn');
+const timerSnapBtn = document.getElementById('timerSnapBtn');
+const fsTimerSnapBtn = document.getElementById('fsTimerSnapBtn');
+const countdownOverlay = document.getElementById('countdownOverlay');
+const countdownText = document.getElementById('countdownText');
+let countdownActive = false;
 
 let stream = null;
 let mirrored = true;
@@ -700,8 +724,10 @@ async function startCamera() {
     toggleBtn.textContent = 'Stop';
     snapBtn.disabled = false;
     recordBtn.disabled = false;
+    timerSnapBtn.disabled = false;
     fsSnapBtn.disabled = false;
     fsRecordBtn.disabled = false;
+    fsTimerSnapBtn.disabled = false;
     statusEl.textContent = 'Live.';
     pickNewTask();
   } catch (err) {
@@ -721,10 +747,14 @@ function stopCamera() {
   toggleBtn.textContent = 'Start';
   snapBtn.disabled = true;
   recordBtn.disabled = true;
+  timerSnapBtn.disabled = true;
   fsSnapBtn.disabled = true;
   fsRecordBtn.disabled = true;
+  fsTimerSnapBtn.disabled = true;
   statusEl.textContent = 'Camera is off.';
   clearTask();
+  countdownActive = false;
+  countdownOverlay.classList.remove('active');
 }
 
 toggleBtn.addEventListener('click', () => {
@@ -772,6 +802,28 @@ function takeSnapshot() {
 
 snapBtn.addEventListener('click', takeSnapshot);
 fsSnapBtn.addEventListener('click', takeSnapshot);
+
+function startTimedSnapshot() {
+  if (!stream || countdownActive) return;
+  countdownActive = true;
+  let n = 3;
+  countdownText.textContent = n;
+  countdownOverlay.classList.add('active');
+  const interval = setInterval(() => {
+    n -= 1;
+    if (n > 0) {
+      countdownText.textContent = n;
+    } else {
+      clearInterval(interval);
+      countdownOverlay.classList.remove('active');
+      countdownActive = false;
+      takeSnapshot();
+    }
+  }, 1000);
+}
+
+timerSnapBtn.addEventListener('click', startTimedSnapshot);
+fsTimerSnapBtn.addEventListener('click', startTimedSnapshot);
 
 /* ---------- Video recording ---------- */
 
